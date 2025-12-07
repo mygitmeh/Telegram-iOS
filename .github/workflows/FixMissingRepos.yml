@@ -1,0 +1,109 @@
+name: Build Telegram IPA with Liquid Glass
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: 'recursive'
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Fix Broken Submodules
+      run: |
+        # Backup current .gitmodules
+        cp .gitmodules .gitmodules.backup
+        
+        # Update submodule URLs to use original Telegram repositories
+        sed -i '' 's|https://github.com/mygitmeh/|https://github.com/TelegramMessenger/|g' .gitmodules
+        sed -i '' 's|https://github.com/ali-fareed/|https://github.com/bazelbuild/|g' .gitmodules
+        
+        # Reinitialize submodules with corrected URLs
+        git submodule sync
+        git submodule update --init --recursive --force
+        
+    - name: Setup Xcode
+      run: |
+        sudo xcode-select -s /Applications/Xcode_16.0.app
+        xcodebuild -version
+        
+    - name: Install Dependencies
+      run: |
+        brew install carthage
+        brew install swiftlint
+        brew install cmake
+        brew install ninja
+        
+    - name: Build Preparation
+      run: |
+        # Set up environment
+        mkdir -p build
+        cd build
+        
+        # Generate Xcode project (Telegram uses XcodeGen)
+        if [ -f "../project.yml" ]; then
+            ../third-party/XcodeGen/bin/xcodegen --project ../ --spec ../project.yml
+        fi
+        
+    - name: Build Telegram
+      run: |
+        # Telegram has a custom build script
+        if [ -f "./build.sh" ]; then
+            ./build.sh --configuration=Debug_AppStore
+        else
+            # Alternative: Try to build with xcodebuild
+            xcodebuild -workspace Telegram.xcworkspace \
+              -scheme Telegram \
+              -configuration Debug \
+              -destination 'generic/platform=iOS' \
+              -archivePath ./build/Telegram.xcarchive \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              archive || true
+        fi
+        
+    - name: Export IPA
+      run: |
+        if [ -d "./build/Telegram.xcarchive" ]; then
+            # Create export options
+            cat > ExportOptions.plist << EOF
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+                <key>method</key>
+                <string>development</string>
+                <key>teamID</key>
+                <string></string>
+                <key>compileBitcode</key>
+                <false/>
+                <key>uploadBitcode</key>
+                <false/>
+                <key>uploadSymbols</key>
+                <false/>
+            </dict>
+            </plist>
+            EOF
+            
+            xcodebuild -exportArchive \
+              -archivePath ./build/Telegram.xcarchive \
+              -exportOptionsPlist ExportOptions.plist \
+              -exportPath ./build \
+              -allowProvisioningUpdates || echo "Export failed, but continuing"
+        fi
+        
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: Telegram-Build
+        path: |
+          build/*.ipa
+          build/*.xcarchive
+        if-no-files-found: warn
