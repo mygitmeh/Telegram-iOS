@@ -12,6 +12,6 @@
 	"enable_siri": true,
 	"enable_icloud": true,
 	"xcode": {
-    "required_version": "26.0.1"
+    "required_version": "26.0"
 }
 }
